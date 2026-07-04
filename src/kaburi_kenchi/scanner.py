@@ -44,19 +44,25 @@ class VideoFile:
 
 
 def enumerate_videos(parent: Path) -> list[VideoFile]:
-    """Walk subfolders directly under `parent` and collect video files inside each.
-
-    Files placed directly in `parent` (depth 0) are ignored — the tool's purpose is
-    to find duplicates *across* the video1/video2/... subfolders.
+    """Walk subfolders under `parent` and collect video files inside each.
+    Also collects video files placed directly in `parent` (depth 0),
+    assigning them a subfolder value of ".".
     """
     if not parent.is_dir():
         raise NotADirectoryError(parent)
 
     results: list[VideoFile] = []
     for sub in sorted(parent.iterdir()):
-        if not sub.is_dir():
-            continue
-        results.extend(_collect_in_subfolder(sub))
+        if sub.is_dir():
+            results.extend(_collect_in_subfolder(sub))
+        elif sub.is_file():
+            if sub.suffix.lower() in VIDEO_EXTS:
+                try:
+                    size = sub.stat().st_size
+                    if size >= MIN_FILE_SIZE_BYTES:
+                        results.append(VideoFile(path=sub, subfolder=".", size=size))
+                except OSError:
+                    pass
     return results
 
 

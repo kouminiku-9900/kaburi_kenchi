@@ -58,49 +58,95 @@ def find_duplicates(
     videos: Iterable[VideoFile],
     duration_tolerance: float = DURATION_TOLERANCE_SEC,
 ) -> list[DuplicateGroup]:
-    """Group videos that share a normalized filename and a near-equal duration.
+    """Group videos that share a normalized filename OR exact size, and a near-equal duration.
 
     Algorithm:
-      1. Bucket by normalized name.
-      2. Within each name bucket, cluster by duration with `duration_tolerance`
-         as the linking distance (single-linkage along the time axis).
-      3. Emit clusters of size >= 2 as DuplicateGroups.
+      1. Use Union-Find to track connected components of videos.
+      2. Group by normalized name. Within each bucket, link videos with similar durations.
+      3. Group by exact file size. Within each bucket, link videos with similar durations.
+      4. Emit components of size >= 2 as DuplicateGroups.
     """
-    by_name: dict[str, list[VideoFile]] = {}
-    for v in videos:
-        if not v.has_meta:
-            continue
-        key = normalize_name(v.stem)
-        if not key:
-            continue
-        by_name.setdefault(key, []).append(v)
+    videos_list = [v for v in videos if v.has_meta]
+    if not videos_list:
+        return []
 
-    groups: list[DuplicateGroup] = []
-    for name_key, items in by_name.items():
+    parent = {id(v): id(v) for v in videos_list}
+
+    def find(i: int) -> int:
+        if parent[i] == i:
+            return i
+        parent[i] = find(parent[i])
+        return parent[i]
+
+    def union(i: int, j: int) -> None:
+        root_i = find(i)
+        root_j = find(j)
+        if root_i != root_j:
+            parent[root_i] = root_j
+
+    # 1. Link by normalized name & duration
+    by_name: dict[str, list[VideoFile]] = {}
+    for v in videos_list:
+        key = normalize_name(v.stem)
+        if key:
+            by_name.setdefault(key, []).append(v)
+
+    for items in by_name.values():
         if len(items) < 2:
             continue
         items.sort(key=lambda f: f.duration or 0.0)
-        clusters: list[list[VideoFile]] = []
-        current: list[VideoFile] = [items[0]]
-        for prev, curr in zip(items, items[1:]):
-            if abs((curr.duration or 0.0) - (prev.duration or 0.0)) <= duration_tolerance:
-                current.append(curr)
-            else:
-                clusters.append(current)
-                current = [curr]
-        clusters.append(current)
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                if (items[j].duration or 0.0) - (items[i].duration or 0.0) <= duration_tolerance:
+                    union(id(items[i]), id(items[j]))
+                else:
+                    break
 
-        for cluster in clusters:
-            if len(cluster) < 2:
-                continue
-            avg = sum(f.duration or 0.0 for f in cluster) / len(cluster)
-            groups.append(
-                DuplicateGroup(
-                    key_name=name_key,
-                    key_duration_sec=int(round(avg)),
-                    files=cluster,
-                )
+    # 2. Link by exact size & duration
+    by_size: dict[int, list[VideoFile]] = {}
+    for v in videos_list:
+        by_size.setdefault(v.size, []).append(v)
+
+    for items in by_size.values():
+        if len(items) < 2:
+            continue
+        items.sort(key=lambda f: f.duration or 0.0)
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                if (items[j].duration or 0.0) - (items[i].duration or 0.0) <= duration_tolerance:
+                    union(id(items[i]), id(items[j]))
+                else:
+                    break
+
+    # 3. Collect groups
+    from collections import Counter
+
+    groups_map: dict[int, list[VideoFile]] = {}
+    for v in videos_list:
+        root = find(id(v))
+        groups_map.setdefault(root, []).append(v)
+
+    groups: list[DuplicateGroup] = []
+    for cluster in groups_map.values():
+        if len(cluster) < 2:
+            continue
+        avg = sum(f.duration or 0.0 for f in cluster) / len(cluster)
+        
+        # Determine a representative name for the group
+        names = [normalize_name(f.stem) for f in cluster]
+        valid_names = [n for n in names if n]
+        if valid_names:
+            key_name = Counter(valid_names).most_common(1)[0][0]
+        else:
+            key_name = cluster[0].stem
+
+        groups.append(
+            DuplicateGroup(
+                key_name=key_name,
+                key_duration_sec=int(round(avg)),
+                files=cluster,
             )
+        )
 
     groups.sort(key=lambda g: (-sum(f.size for f in g.files), g.key_name))
     return groups
