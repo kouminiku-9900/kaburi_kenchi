@@ -62,6 +62,7 @@ def probe_one(video: VideoFile, ffprobe_path: str) -> VideoFile:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=FFPROBE_TIMEOUT_SEC,
             creationflags=_SUBPROCESS_FLAGS,
         )
