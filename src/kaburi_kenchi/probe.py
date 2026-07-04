@@ -76,6 +76,10 @@ def probe_one(video: VideoFile, ffprobe_path: str) -> VideoFile:
         video.probe_error = (proc.stderr or "ffprobe failed").strip()[:200]
         return video
 
+    if proc.stdout is None:
+        video.probe_error = "ffprobe failed to capture output (stdout is None)"
+        return video
+
     try:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError:
